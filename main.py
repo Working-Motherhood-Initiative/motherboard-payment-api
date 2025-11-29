@@ -1,6 +1,5 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, field_validator
 import httpx
 import os
 from dotenv import load_dotenv
@@ -22,12 +21,12 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable not set")
 
 if DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
 engine = create_engine(
     DATABASE_URL,
-    pool_pre_ping=True,  
-    pool_recycle=3600,   
+    pool_pre_ping=True,
+    pool_recycle=3600,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -68,13 +67,12 @@ class PaymentLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, index=True)
     reference = Column(String, unique=True, index=True)
-    amount = Column(Integer)  # In pesewas
+    amount = Column(Integer)
     status = Column(String)
     event_type = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
-    metadata = Column(String, nullable=True)  # JSON string
+    metadata = Column(String, nullable=True)
 
-# Create tables
 Base.metadata.create_all(bind=engine)
 
 def get_db():
@@ -82,11 +80,11 @@ def get_db():
     try:
         yield db
     finally:
-        db.close() 
+        db.close()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -101,34 +99,10 @@ headers = {
     "Content-Type": "application/json"
 }
 
-class UserCreate(BaseModel):
-    email: str
-    first_name: str
-    last_name: str
-    
-    @field_validator('email')
-    @classmethod
-    def validate_email(cls, v):
-        if '@' not in v or '.' not in v:
-            raise ValueError('Invalid email format')
-        return v.lower()
-
-class SubscriptionCreate(BaseModel):
-    email: str
-    
-    @field_validator('email')
-    @classmethod
-    def validate_email(cls, v):
-        if '@' not in v or '.' not in v:
-            raise ValueError('Invalid email format')
-        return v.lower()
-
-class PaymentVerification(BaseModel):
-    reference: str
-
-class WebhookPayload(BaseModel):
-    event: str
-    data: dict
+def validate_email(email: str) -> str:
+    if not email or '@' not in email or '.' not in email:
+        raise ValueError('Invalid email format')
+    return email.lower().strip()
 
 @app.get("/")
 async def root():
@@ -136,27 +110,33 @@ async def root():
 
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
-    """Health check endpoint for Render"""
     try:
         db.execute(sa.text("SELECT 1"))
         return {"status": "ok", "database": "connected"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
 
-# 1. CREATE CUSTOMER ENDPOINT
 @app.post("/api/customers")
-async def create_customer(user: UserCreate, db: Session = Depends(get_db)):
+async def create_customer(data: dict, db: Session = Depends(get_db)):
     try:
-        # Check if user already exists
-        existing_user = db.query(User).filter(User.email == user.email).first()
+        email = data.get('email', '').strip()
+        first_name = data.get('first_name', '').strip()
+        last_name = data.get('last_name', '').strip()
+        
+        if not email or not first_name or not last_name:
+            raise HTTPException(status_code=400, detail="email, first_name, and last_name are required")
+        
+        validate_email(email)
+        
+        existing_user = db.query(User).filter(User.email == email).first()
         if existing_user:
             raise HTTPException(status_code=400, detail="Customer already exists")
         
         async with httpx.AsyncClient() as client:
             payload = {
-                "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name
+                "email": email,
+                "first_name": first_name,
+                "last_name": last_name
             }
             
             response = await client.post(
@@ -170,11 +150,10 @@ async def create_customer(user: UserCreate, db: Session = Depends(get_db)):
             
             paystack_customer = response.json()["data"]
             
-            # Store customer in database
             db_user = User(
-                email=user.email,
-                first_name=user.first_name,
-                last_name=user.last_name,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
                 paystack_customer_code=paystack_customer["customer_code"],
                 paystack_customer_id=paystack_customer["id"],
                 subscription_active=False
@@ -187,31 +166,30 @@ async def create_customer(user: UserCreate, db: Session = Depends(get_db)):
                 "status": "success",
                 "message": "Customer created successfully",
                 "data": {
-                    "email": user.email,
+                    "email": email,
                     "customer_code": paystack_customer["customer_code"]
                 }
             }
     
-    except httpx.HTTPError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error communicating with Paystack: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-# 2. INITIALIZE TRANSACTION (First payment to authorize)
 @app.post("/api/initialize-payment")
-async def initialize_payment(email: str, db: Session = Depends(get_db)):
+async def initialize_payment(data: dict, db: Session = Depends(get_db)):
     try:
+        email = data.get('email', '').strip()
+        
         user = db.query(User).filter(User.email == email).first()
         if not user:
             raise HTTPException(status_code=404, detail="Customer not found. Create customer first.")
         
         async with httpx.AsyncClient() as client:
-            # Amount in pesewas (GHS 80 = 8000 pesewas)
             payload = {
                 "email": email,
-                "amount": 8000,  # GHS 80
+                "amount": 8000,
                 "channels": ["card", "bank", "ussd", "qr", "mobile_money"],
                 "metadata": {
                     "plan_name": "Motherboard Monthly Plan",
@@ -240,16 +218,22 @@ async def initialize_payment(email: str, db: Session = Depends(get_db)):
                 }
             }
     
-    except httpx.HTTPError as e:
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error with Paystack: {str(e)}")
 
-# 3. VERIFY PAYMENT
 @app.post("/api/verify-payment")
-async def verify_payment(verification: PaymentVerification, db: Session = Depends(get_db)):
+async def verify_payment(data: dict, db: Session = Depends(get_db)):
     try:
+        reference = data.get('reference', '').strip()
+        
+        if not reference:
+            raise HTTPException(status_code=400, detail="reference is required")
+        
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{PAYSTACK_BASE_URL}/transaction/verify/{verification.reference}",
+                f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
                 headers=headers
             )
             
@@ -264,12 +248,10 @@ async def verify_payment(verification: PaymentVerification, db: Session = Depend
                     "message": "Payment was not successful"
                 }
             
-            # Payment successful! Now we have authorization
             customer_email = transaction["customer"]["email"]
             authorization_data = transaction["authorization"]
             amount = transaction["amount"]
             
-            # Update user with authorization
             user = db.query(User).filter(User.email == customer_email).first()
             if user:
                 user.authorization_code = authorization_data["authorization_code"]
@@ -277,10 +259,9 @@ async def verify_payment(verification: PaymentVerification, db: Session = Depend
                 user.updated_at = datetime.utcnow()
                 db.commit()
             
-            # Log payment
             payment_log = PaymentLog(
                 email=customer_email,
-                reference=verification.reference,
+                reference=reference,
                 amount=amount,
                 status="success",
                 event_type="initial_payment",
@@ -294,23 +275,21 @@ async def verify_payment(verification: PaymentVerification, db: Session = Depend
                 "message": "Payment verified! Customer is now authorized for subscriptions.",
                 "data": {
                     "email": customer_email,
-                    "amount": amount / 100,  # Convert back to GHS
-                    "reference": verification.reference
+                    "amount": amount / 100,
+                    "reference": reference
                 }
             }
     
-    except httpx.HTTPError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error verifying payment: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error verifying payment: {str(e)}")
 
-# 4. CREATE SUBSCRIPTION (After first payment)
 @app.post("/api/create-subscription")
-async def create_subscription(subscription: SubscriptionCreate, db: Session = Depends(get_db)):
+async def create_subscription(data: dict, db: Session = Depends(get_db)):
     try:
-        email = subscription.email
+        email = data.get('email', '').strip()
         
         user = db.query(User).filter(User.email == email).first()
         if not user:
@@ -323,10 +302,9 @@ async def create_subscription(subscription: SubscriptionCreate, db: Session = De
             )
         
         async with httpx.AsyncClient() as client:
-            # Create subscription using customer's authorization
             payload = {
                 "customer": user.paystack_customer_code,
-                "plan": "PLN_u6si72zqqto8dq0",  # Your plan ID
+                "plan": "PLN_u6si72zqqto8dq0",
                 "authorization": user.authorization_code,
                 "start_date": datetime.utcnow().isoformat()
             }
@@ -343,7 +321,6 @@ async def create_subscription(subscription: SubscriptionCreate, db: Session = De
             
             subscription_data = response.json()["data"]
             
-            # Store subscription in database
             db_subscription = Subscription(
                 email=email,
                 subscription_code=subscription_data["subscription_code"],
@@ -353,7 +330,6 @@ async def create_subscription(subscription: SubscriptionCreate, db: Session = De
             )
             db.add(db_subscription)
             
-            # Update user status
             user.subscription_active = True
             user.subscription_code = subscription_data["subscription_code"]
             user.updated_at = datetime.utcnow()
@@ -371,17 +347,15 @@ async def create_subscription(subscription: SubscriptionCreate, db: Session = De
                 }
             }
     
-    except httpx.HTTPError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error creating subscription: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error creating subscription: {str(e)}")
 
-# 5. CHECK SUBSCRIPTION STATUS
 @app.get("/api/subscription-status/{email}")
 async def check_subscription_status(email: str, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == email).first()
+    user = db.query(User).filter(User.email == email.lower()).first()
     
     if not user:
         return {
@@ -399,14 +373,11 @@ async def check_subscription_status(email: str, db: Session = Depends(get_db)):
         "created_at": user.created_at.isoformat() if user.created_at else None
     }
 
-# 6. WEBHOOK ENDPOINT (Paystack sends payment notifications here)
 @app.post("/api/webhooks/paystack")
 async def paystack_webhook(payload: dict, db: Session = Depends(get_db)):
     try:
-        # Verify webhook signature
         signature = payload.get("signature")
         
-        # Reconstruct the hash
         hash_object = hmac.new(
             PAYSTACK_SECRET_KEY.encode(),
             json.dumps(payload).encode(),
@@ -415,7 +386,6 @@ async def paystack_webhook(payload: dict, db: Session = Depends(get_db)):
         
         computed_signature = hash_object.hexdigest()
         
-        # Verify signature matches
         if signature != computed_signature:
             raise HTTPException(status_code=401, detail="Invalid signature")
         
@@ -423,7 +393,6 @@ async def paystack_webhook(payload: dict, db: Session = Depends(get_db)):
         data = payload.get("data")
         
         if event == "charge.success":
-            # Subscription payment successful
             customer_email = data["customer"]["email"]
             
             user = db.query(User).filter(User.email == customer_email).first()
@@ -433,7 +402,6 @@ async def paystack_webhook(payload: dict, db: Session = Depends(get_db)):
                 user.updated_at = datetime.utcnow()
                 db.commit()
             
-            # Log payment
             payment_log = PaymentLog(
                 email=customer_email,
                 reference=data.get("reference"),
@@ -446,7 +414,6 @@ async def paystack_webhook(payload: dict, db: Session = Depends(get_db)):
             db.commit()
         
         elif event == "subscription.disable":
-            # Subscription disabled/cancelled
             customer_email = data["customer"]["email"]
             
             user = db.query(User).filter(User.email == customer_email).first()
@@ -461,11 +428,10 @@ async def paystack_webhook(payload: dict, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Webhook processing error: {str(e)}")
 
-# 7. CANCEL SUBSCRIPTION
 @app.post("/api/cancel-subscription/{email}")
 async def cancel_subscription(email: str, db: Session = Depends(get_db)):
     try:
-        user = db.query(User).filter(User.email == email).first()
+        user = db.query(User).filter(User.email == email.lower()).first()
         if not user:
             raise HTTPException(status_code=404, detail="Customer not found")
         
@@ -484,7 +450,6 @@ async def cancel_subscription(email: str, db: Session = Depends(get_db)):
             if response.status_code != 200:
                 raise HTTPException(status_code=400, detail="Failed to cancel subscription")
             
-            # Update database
             user.subscription_active = False
             user.updated_at = datetime.utcnow()
             db.commit()
@@ -494,14 +459,12 @@ async def cancel_subscription(email: str, db: Session = Depends(get_db)):
                 "message": "Subscription cancelled successfully"
             }
     
-    except httpx.HTTPError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error cancelling subscription: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error cancelling subscription: {str(e)}")
 
-# 8. GET ALL CUSTOMERS (For admin dashboard)
 @app.get("/api/admin/customers")
 async def get_all_customers(db: Session = Depends(get_db)):
     users = db.query(User).all()
@@ -523,4 +486,4 @@ async def get_all_customers(db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
