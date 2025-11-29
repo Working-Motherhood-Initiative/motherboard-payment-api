@@ -3,4 +3,4 @@ uvicorn==0.24.0
 httpx==0.25.2
 python-dotenv==1.0.0
 sqlalchemy==2.0.23
-psycopg[binary]==3.2.1
+psycopg[binary]
