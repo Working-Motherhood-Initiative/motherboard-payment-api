@@ -1,8 +1,7 @@
 fastapi==0.104.1
-uvicorn[standard]==0.24.0
+uvicorn==0.24.0
 httpx==0.25.2
-pydantic[email]==2.5.0
+pydantic==2.5.0
 python-dotenv==1.0.0
 sqlalchemy==2.0.23
 psycopg[binary]==3.1.14
-gunicorn==21.2.0

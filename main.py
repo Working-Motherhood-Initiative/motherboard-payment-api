@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, field_validator
 import httpx
 import os
 from dotenv import load_dotenv
@@ -102,12 +102,26 @@ headers = {
 }
 
 class UserCreate(BaseModel):
-    email: EmailStr
+    email: str
     first_name: str
     last_name: str
+    
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v):
+        if '@' not in v or '.' not in v:
+            raise ValueError('Invalid email format')
+        return v.lower()
 
 class SubscriptionCreate(BaseModel):
-    email: EmailStr
+    email: str
+    
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v):
+        if '@' not in v or '.' not in v:
+            raise ValueError('Invalid email format')
+        return v.lower()
 
 class PaymentVerification(BaseModel):
     reference: str
