@@ -7,8 +7,7 @@ import json
 from datetime import datetime
 import hmac
 import hashlib
-import sqlalchemy as sa
-from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Integer
+from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Integer, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
@@ -22,6 +21,9 @@ if not DATABASE_URL:
 
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+elif not DATABASE_URL.startswith("postgresql+psycopg://"):
+    # Ensure it uses psycopg driver, not psycopg2
+    DATABASE_URL = DATABASE_URL.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
 
 engine = create_engine(
     DATABASE_URL,
@@ -71,7 +73,7 @@ class PaymentLog(Base):
     status = Column(String)
     event_type = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
-    metadata = Column(String, nullable=True)
+    metadata_json = Column(String, nullable=True)
 
 Base.metadata.create_all(bind=engine)
 
@@ -111,7 +113,7 @@ async def root():
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
     try:
-        db.execute(sa.text("SELECT 1"))
+        db.execute(text("SELECT 1"))
         return {"status": "ok", "database": "connected"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
@@ -265,7 +267,7 @@ async def verify_payment(data: dict, db: Session = Depends(get_db)):
                 amount=amount,
                 status="success",
                 event_type="initial_payment",
-                metadata=json.dumps(authorization_data)
+                metadata_json=json.dumps(authorization_data)
             )
             db.add(payment_log)
             db.commit()
@@ -408,7 +410,7 @@ async def paystack_webhook(payload: dict, db: Session = Depends(get_db)):
                 amount=data.get("amount"),
                 status="success",
                 event_type="charge.success",
-                metadata=json.dumps(data)
+                metadata_json=json.dumps(data)
             )
             db.add(payment_log)
             db.commit()
@@ -486,4 +488,4 @@ async def get_all_customers(db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
