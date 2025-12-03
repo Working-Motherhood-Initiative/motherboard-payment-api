@@ -404,10 +404,17 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
         data = payload.get("data")
         
         if event == "charge.success":
+            if not data or "customer" not in data or "email" not in data.get("customer", {}):
+                return {"status": "ok", "message": "No customer email found"}
+            
             customer_email = data["customer"]["email"]
             
             user = db.query(User).filter(User.email == customer_email).first()
             if user:
+                # Save authorization code from webhook data
+                if "authorization" in data and "authorization_code" in data["authorization"]:
+                    user.authorization_code = data["authorization"]["authorization_code"]
+                    user.first_authorization = True
                 user.subscription_active = True
                 user.last_payment_date = datetime.utcnow()
                 user.updated_at = datetime.utcnow()
