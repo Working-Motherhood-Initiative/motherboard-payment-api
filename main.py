@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import os
@@ -119,8 +119,9 @@ async def health_check(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
 
 @app.post("/api/customers")
-async def create_customer(data: dict, db: Session = Depends(get_db)):
+async def create_customer(request: Request, db: Session = Depends(get_db)):
     try:
+        data = await request.json()
         email = data.get('email', '').strip()
         first_name = data.get('first_name', '').strip()
         last_name = data.get('last_name', '').strip()
@@ -180,8 +181,9 @@ async def create_customer(data: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/initialize-payment")
-async def initialize_payment(data: dict, db: Session = Depends(get_db)):
+async def initialize_payment(request: Request, db: Session = Depends(get_db)):
     try:
+        data = await request.json()
         email = data.get('email', '').strip()
         
         user = db.query(User).filter(User.email == email).first()
@@ -226,8 +228,9 @@ async def initialize_payment(data: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error with Paystack: {str(e)}")
 
 @app.post("/api/verify-payment")
-async def verify_payment(data: dict, db: Session = Depends(get_db)):
+async def verify_payment(request: Request, db: Session = Depends(get_db)):
     try:
+        data = await request.json()
         reference = data.get('reference', '').strip()
         
         if not reference:
@@ -289,8 +292,9 @@ async def verify_payment(data: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error verifying payment: {str(e)}")
 
 @app.post("/api/create-subscription")
-async def create_subscription(data: dict, db: Session = Depends(get_db)):
+async def create_subscription(request: Request, db: Session = Depends(get_db)):
     try:
+        data = await request.json()
         email = data.get('email', '').strip()
         
         user = db.query(User).filter(User.email == email).first()
@@ -376,8 +380,9 @@ async def check_subscription_status(email: str, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/webhooks/paystack")
-async def paystack_webhook(payload: dict, db: Session = Depends(get_db)):
+async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     try:
+        payload = await request.json()
         signature = payload.get("signature")
         
         hash_object = hmac.new(
