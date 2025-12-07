@@ -397,21 +397,24 @@ async def check_subscription_status(email: str, db: Session = Depends(get_db)):
 @app.post("/api/webhooks/paystack")
 async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     try:
-        payload = await request.json()
+        # Get raw body for signature validation
+        raw_body = await request.body()
+        payload = json.loads(raw_body)
         
         signature = request.headers.get("X-Paystack-Signature")
         hash_object = hmac.new(
             PAYSTACK_SECRET_KEY.encode(),
-            json.dumps(payload).encode(),
+            raw_body,
             hashlib.sha512
         )
         
         computed_signature = hash_object.hexdigest()
         
         if signature != computed_signature:
-            print(f"Invalid webhook signature")
+            print(f"Invalid webhook signature. Expected: {computed_signature}, Got: {signature}")
             return {"status": "error", "message": "Invalid signature"}
         
+        print("Signature validated")
         event = payload.get("event")
         data = payload.get("data")
         
