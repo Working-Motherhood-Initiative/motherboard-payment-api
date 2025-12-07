@@ -520,12 +520,11 @@ async def cancel_subscription(email: str, db: Session = Depends(get_db)):
         
         async with httpx.AsyncClient() as client:
             payload = {
-                "code": user.subscription_code,
                 "token": user.authorization_code
             }
             
             response = await client.post(
-                f"{PAYSTACK_BASE_URL}/subscription/disable",
+                f"{PAYSTACK_BASE_URL}/subscription/{user.subscription_code}/disable",
                 json=payload,
                 headers=headers
             )
