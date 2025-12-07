@@ -14,7 +14,6 @@ from sqlalchemy.orm import sessionmaker, Session
 load_dotenv()
 app = FastAPI()
 
-# ==================== DATABASE SETUP ====================
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
@@ -23,7 +22,6 @@ if not DATABASE_URL:
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 elif not DATABASE_URL.startswith("postgresql+psycopg://"):
-    # Ensure it uses psycopg driver, not psycopg2
     DATABASE_URL = DATABASE_URL.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
 
 engine = create_engine(
@@ -35,7 +33,6 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# ==================== DATABASE MODELS ====================
 class User(Base):
     __tablename__ = "users"
     
@@ -86,13 +83,12 @@ def get_db():
     finally:
         db.close()
 
-# ==================== CORS & CONSTANTS ====================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://dragonfly-chihuahua-alhg.squarespace.com"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["POST", "GET"],
+    allow_headers=["Content-Type"],
 )
 
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
@@ -104,13 +100,11 @@ headers = {
     "Content-Type": "application/json"
 }
 
-# ==================== VALIDATION ====================
 def validate_email(email: str) -> str:
     if not email or '@' not in email or '.' not in email:
         raise ValueError('Invalid email format')
     return email.lower().strip()
 
-# ==================== ENDPOINTS ====================
 @app.get("/")
 async def root():
     return {"message": "Motherboard+ Service Payment API", "status": "running"}
@@ -190,6 +184,9 @@ async def initialize_payment(request: Request, db: Session = Depends(get_db)):
     try:
         data = await request.json()
         email = data.get('email', '').strip()
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
         
         user = db.query(User).filter(User.email == email).first()
         if not user:
@@ -302,6 +299,9 @@ async def create_subscription(request: Request, db: Session = Depends(get_db)):
         data = await request.json()
         email = data.get('email', '').strip()
         
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+        
         user = db.query(User).filter(User.email == email).first()
         if not user:
             raise HTTPException(status_code=404, detail="Customer not found")
@@ -389,16 +389,18 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     try:
         payload = await request.json()
         
-        # Temporarily skip signature validation for debugging
-        # signature = payload.get("signature")
-        # hash_object = hmac.new(
-        #     PAYSTACK_SECRET_KEY.encode(),
-        #     json.dumps(payload).encode(),
-        #     hashlib.sha512
-        # )
-        # computed_signature = hash_object.hexdigest()
-        # if signature != computed_signature:
-        #     raise HTTPException(status_code=401, detail="Invalid signature")
+        signature = payload.get("signature")
+        hash_object = hmac.new(
+            PAYSTACK_SECRET_KEY.encode(),
+            json.dumps(payload).encode(),
+            hashlib.sha512
+        )
+        
+        computed_signature = hash_object.hexdigest()
+        
+        if signature != computed_signature:
+            print(f"Invalid webhook signature: {signature}")
+            raise HTTPException(status_code=401, detail="Invalid signature")
         
         event = payload.get("event")
         data = payload.get("data")
@@ -411,7 +413,6 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
             
             user = db.query(User).filter(User.email == customer_email).first()
             if user:
-                # Save authorization code from webhook data
                 if "authorization" in data and "authorization_code" in data["authorization"]:
                     user.authorization_code = data["authorization"]["authorization_code"]
                     user.first_authorization = True
@@ -432,6 +433,9 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
             db.commit()
         
         elif event == "subscription.disable":
+            if not data or "customer" not in data or "email" not in data.get("customer", {}):
+                return {"status": "ok", "message": "No customer email found"}
+            
             customer_email = data["customer"]["email"]
             
             user = db.query(User).filter(User.email == customer_email).first()
@@ -443,12 +447,16 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
         return {"status": "ok"}
     
     except Exception as e:
+        print(f"Webhook error: {str(e)}")
         db.rollback()
-        raise HTTPException(status_code=400, detail=f"Webhook processing error: {str(e)}")
+        return {"status": "error", "message": str(e)}
 
 @app.post("/api/cancel-subscription/{email}")
 async def cancel_subscription(email: str, db: Session = Depends(get_db)):
     try:
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+        
         user = db.query(User).filter(User.email == email.lower()).first()
         if not user:
             raise HTTPException(status_code=404, detail="Customer not found")
