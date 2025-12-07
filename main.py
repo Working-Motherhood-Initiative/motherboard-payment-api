@@ -353,6 +353,7 @@ async def create_subscription(request: Request, db: Session = Depends(get_db)):
             
             user.subscription_active = True
             user.subscription_code = subscription_data["subscription_code"]
+            user.authorization_code = subscription_data.get("email_token", user.authorization_code)
             user.updated_at = datetime.utcnow()
             
             db.commit()
@@ -464,6 +465,7 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
                                 )
                                 db.add(db_subscription)
                                 user.subscription_code = subscription_data["subscription_code"]
+                                user.authorization_code = subscription_data.get("email_token", user.authorization_code)
                                 db.commit()
                                 print(f"Subscription created: {subscription_data['subscription_code']}")
                     except Exception as e:
