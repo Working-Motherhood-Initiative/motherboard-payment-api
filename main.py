@@ -399,6 +399,14 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     try:
         payload = await request.json()
         
+        signature_from_header = request.headers.get("X-Paystack-Signature")
+        signature_from_body = payload.get("signature")
+        
+        print(f"Signature in body: {signature_from_body}")
+        print(f"Signature in header: {signature_from_header}")
+        print(f"Full headers: {dict(request.headers)}")
+        print(f"Full payload: {json.dumps(payload, indent=2)}")
+        
         signature = payload.get("signature")
         hash_object = hmac.new(
             PAYSTACK_SECRET_KEY.encode(),
