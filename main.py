@@ -399,15 +399,7 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     try:
         payload = await request.json()
         
-        signature_from_header = request.headers.get("X-Paystack-Signature")
-        signature_from_body = payload.get("signature")
-        
-        print(f"Signature in body: {signature_from_body}")
-        print(f"Signature in header: {signature_from_header}")
-        print(f"Full headers: {dict(request.headers)}")
-        print(f"Full payload: {json.dumps(payload, indent=2)}")
-        
-        signature = payload.get("signature")
+        signature = request.headers.get("X-Paystack-Signature")
         hash_object = hmac.new(
             PAYSTACK_SECRET_KEY.encode(),
             json.dumps(payload).encode(),
@@ -417,8 +409,8 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
         computed_signature = hash_object.hexdigest()
         
         if signature != computed_signature:
-            print(f"Invalid webhook signature: {signature}")
-            raise HTTPException(status_code=401, detail="Invalid signature")
+            print(f"Invalid webhook signature")
+            return {"status": "error", "message": "Invalid signature"}
         
         event = payload.get("event")
         data = payload.get("data")
