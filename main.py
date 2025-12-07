@@ -519,7 +519,10 @@ async def cancel_subscription(email: str, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="No active subscription found")
         
         async with httpx.AsyncClient() as client:
-            payload = {"code": user.subscription_code}
+            payload = {
+                "code": user.subscription_code,
+                "token": user.authorization_code
+            }
             
             response = await client.post(
                 f"{PAYSTACK_BASE_URL}/subscription/disable",
