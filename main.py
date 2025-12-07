@@ -299,12 +299,18 @@ async def create_subscription(request: Request, db: Session = Depends(get_db)):
         data = await request.json()
         email = data.get('email', '').strip()
         
+        print(f"Create subscription request for: {email}")
+        
         if not email:
             raise HTTPException(status_code=400, detail="email is required")
         
         user = db.query(User).filter(User.email == email).first()
+        print(f"User found: {user}")
+        
         if not user:
             raise HTTPException(status_code=404, detail="Customer not found")
+        
+        print(f"Authorization code: {user.authorization_code}")
         
         if not user.authorization_code:
             raise HTTPException(
@@ -325,6 +331,9 @@ async def create_subscription(request: Request, db: Session = Depends(get_db)):
                 json=payload,
                 headers=headers
             )
+            
+            print(f"Paystack response: {response.status_code}")
+            print(f"Response body: {response.text}")
             
             if response.status_code != 200:
                 error_msg = response.json().get("message", "Failed to create subscription")
@@ -361,6 +370,7 @@ async def create_subscription(request: Request, db: Session = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Create subscription error: {str(e)}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error creating subscription: {str(e)}")
 
@@ -454,12 +464,18 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
 @app.post("/api/cancel-subscription/{email}")
 async def cancel_subscription(email: str, db: Session = Depends(get_db)):
     try:
+        print(f"Cancel subscription request for: {email}")
+        
         if not email:
             raise HTTPException(status_code=400, detail="email is required")
         
         user = db.query(User).filter(User.email == email.lower()).first()
+        print(f"User found: {user}")
+        
         if not user:
             raise HTTPException(status_code=404, detail="Customer not found")
+        
+        print(f"Subscription code: {user.subscription_code}")
         
         if not user.subscription_code:
             raise HTTPException(status_code=400, detail="No active subscription found")
@@ -472,6 +488,8 @@ async def cancel_subscription(email: str, db: Session = Depends(get_db)):
                 json=payload,
                 headers=headers
             )
+            
+            print(f"Paystack response: {response.status_code}")
             
             if response.status_code != 200:
                 raise HTTPException(status_code=400, detail="Failed to cancel subscription")
@@ -488,6 +506,7 @@ async def cancel_subscription(email: str, db: Session = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Cancel subscription error: {str(e)}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error cancelling subscription: {str(e)}")
 
@@ -512,4 +531,4 @@ async def get_all_customers(db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
