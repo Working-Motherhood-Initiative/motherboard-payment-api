@@ -332,11 +332,12 @@ async def create_subscription(request: Request, db: Session = Depends(get_db)):
                 headers=headers
             )
             
-            print(f"Paystack response: {response.status_code}")
-            print(f"Response body: {response.text}")
+            print(f"Paystack subscription response: {response.status_code}")
+            print(f"Paystack response body: {response.text}")
             
             if response.status_code != 200:
                 error_msg = response.json().get("message", "Failed to create subscription")
+                print(f"Subscription creation failed: {error_msg}")
                 raise HTTPException(status_code=400, detail=error_msg)
             
             subscription_data = response.json()["data"]
