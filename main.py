@@ -434,6 +434,40 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
                 user.last_payment_date = datetime.utcnow()
                 user.updated_at = datetime.utcnow()
                 db.commit()
+                
+                # Auto-create subscription immediately
+                if user.authorization_code and not user.subscription_code:
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            payload = {
+                                "customer": user.paystack_customer_code,
+                                "plan": "PLN_u6si72zqqto8dq0",
+                                "authorization": user.authorization_code,
+                                "start_date": datetime.utcnow().isoformat()
+                            }
+                            
+                            response = await client.post(
+                                f"{PAYSTACK_BASE_URL}/subscription",
+                                json=payload,
+                                headers=headers
+                            )
+                            
+                            if response.status_code == 200:
+                                subscription_data = response.json()["data"]
+                                
+                                db_subscription = Subscription(
+                                    email=customer_email,
+                                    subscription_code=subscription_data["subscription_code"],
+                                    plan_id=subscription_data["plan"],
+                                    status=subscription_data["status"],
+                                    next_payment_date=subscription_data.get("next_payment_date")
+                                )
+                                db.add(db_subscription)
+                                user.subscription_code = subscription_data["subscription_code"]
+                                db.commit()
+                                print(f"Subscription created: {subscription_data['subscription_code']}")
+                    except Exception as e:
+                        print(f"Error creating subscription in webhook: {str(e)}")
             
             payment_log = PaymentLog(
                 email=customer_email,
