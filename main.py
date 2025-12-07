@@ -528,9 +528,12 @@ async def cancel_subscription(email: str, db: Session = Depends(get_db)):
             )
             
             print(f"Paystack response: {response.status_code}")
+            print(f"Paystack response body: {response.text}")
             
             if response.status_code != 200:
-                raise HTTPException(status_code=400, detail="Failed to cancel subscription")
+                error_msg = response.json().get("message", "Failed to cancel subscription")
+                print(f"Cancel failed: {error_msg}")
+                raise HTTPException(status_code=400, detail=error_msg)
             
             user.subscription_active = False
             user.updated_at = datetime.utcnow()
